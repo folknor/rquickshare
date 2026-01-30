@@ -14,6 +14,7 @@ export default defineConfig({
 			'@': path.resolve(__dirname, 'src'),
 		},
 	},
+	publicDir: 'icons',
 	clearScreen: false,
 	envPrefix: ['VITE_', 'TAURI_'],
 	server: {

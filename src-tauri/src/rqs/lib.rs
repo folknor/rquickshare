@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use anyhow::anyhow;
 use channel::ChannelMessage;
-#[cfg(all(feature = "experimental", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 use hdl::BleAdvertiser;
 use hdl::MDnsDiscovery;
 use rand::Rng;
@@ -16,7 +16,6 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-#[cfg(feature = "experimental")]
 use crate::hdl::BleListener;
 use crate::hdl::MDnsServer;
 use crate::manager::TcpServer;
@@ -155,15 +154,12 @@ impl RQS {
         let ctk = ctoken.clone();
         tracker.spawn(async move { server.run(ctk).await });
 
-        #[cfg(feature = "experimental")]
+        if let Ok(ble) = BleListener::new(self.ble_sender.clone())
+            .await
+            .inspect_err(|err| warn!("BleListener: {err}"))
         {
-            if let Ok(ble) = BleListener::new(self.ble_sender.clone())
-                .await
-                .inspect_err(|err| warn!("BleListener: {err}"))
-            {
-                let ctk = ctoken.clone();
-                tracker.spawn(async move { ble.run(ctk).await });
-            }
+            let ctk = ctoken.clone();
+            tracker.spawn(async move { ble.run(ctk).await });
         }
 
         // Start MDnsServer in own "task"
@@ -194,7 +190,7 @@ impl RQS {
         let ctk = CancellationToken::new();
         self.discovery_ctk = Some(ctk.clone());
 
-        #[cfg(all(feature = "experimental", target_os = "linux"))]
+        #[cfg(target_os = "linux")]
         {
             let ctk_blea = ctk.clone();
             tracker.spawn(async move {

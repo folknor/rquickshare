@@ -6,7 +6,7 @@
 
 - [ ] `unwrap_used` — Replace all `.unwrap()` calls with proper error handling
 - [ ] `cast_possible_truncation` — Audit all numeric casts for potential truncation
-- [ ] `cast_sign_loss` — Audit all signed-to-unsigned casts
+- [x] `cast_sign_loss` — Audit all signed-to-unsigned casts
 - [x] `cognitive_complexity` — Refactor complex functions into smaller units
 
 ## Dependency Optimizations

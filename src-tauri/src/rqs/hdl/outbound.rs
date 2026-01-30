@@ -476,7 +476,7 @@ impl OutboundRequest {
                         self.state
                             .payload_buffers
                             .entry(payload_id)
-                            .or_insert_with(|| Vec::with_capacity(header.total_size() as usize));
+                            .or_insert_with(|| Vec::with_capacity(usize::try_from(header.total_size()).unwrap_or_default()));
 
                         // Get the current length of the buffer, if it exists, without holding a mutable borrow.
                         let buffer_len = self.state.payload_buffers.get(&payload_id).unwrap().len();

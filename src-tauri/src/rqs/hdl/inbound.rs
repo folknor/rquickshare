@@ -554,7 +554,7 @@ impl InboundRequest {
         self.state
             .payload_buffers
             .entry(payload_id)
-            .or_insert_with(|| Vec::with_capacity(header.total_size() as usize));
+            .or_insert_with(|| Vec::with_capacity(usize::try_from(header.total_size()).unwrap_or_default()));
 
         let buffer_len = self.state.payload_buffers.get(&payload_id).unwrap().len();
         if chunk.offset() != buffer_len as i64 {
@@ -632,7 +632,7 @@ impl InboundRequest {
                 .file
                 .as_ref()
                 .unwrap()
-                .write_all_at(chunk.body(), current_offset as u64)?;
+                .write_all_at(chunk.body(), u64::try_from(current_offset).unwrap_or_default())?;
             file_internal.bytes_transferred += chunk_size as i64;
 
             self.update_state(
@@ -913,7 +913,7 @@ impl InboundRequest {
                     total_size: file.size(),
                     file: None,
                 };
-                total_bytes += info.total_size as u64;
+                total_bytes += u64::try_from(info.total_size).unwrap_or_default();
                 self.state.transferred_files.insert(file.payload_id(), info);
                 files_name.push(file.name().to_owned());
             }

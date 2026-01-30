@@ -94,7 +94,7 @@ impl MDnsDiscovery {
                                         };
                                         info!("ServiceResolved: Resolved a new service: {ei:?}");
                                         cache.insert(fullname.clone(), ei.clone());
-                                        let _ = self.sender.send(ei);
+                                        drop(self.sender.send(ei));
                                     }
                                 }
                                 ServiceEvent::ServiceRemoved(_, fullname) => {
@@ -105,10 +105,10 @@ impl MDnsDiscovery {
                                     if let Some(id) = should_remove {
                                         info!("ServiceRemoved: Remove a previous service: {fullname}");
                                         cache.remove(&fullname);
-                                        let _ = self.sender.send(EndpointInfo {
+                                        drop(self.sender.send(EndpointInfo {
                                             id,
                                             ..Default::default()
-                                        });
+                                        }));
                                     }
                                 }
                                 ServiceEvent::SearchStarted(_) | ServiceEvent::SearchStopped(_) => {}

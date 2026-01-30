@@ -79,15 +79,15 @@ async fn main() -> Result<(), anyhow::Error> {
                 match run_result {
                     Ok((sender_file, _ble_receiver)) => {
                         // Store sender_file for later use
-                        let _ = state.sender_file.set(sender_file);
+                        drop(state.sender_file.set(sender_file));
                         trace!("RQS started successfully");
 
                         // Emit event to frontend that backend is ready
-                        let _ = app_handle.emit("backend_ready", ());
+                        drop(app_handle.emit("backend_ready", ()));
                     }
                     Err(e) => {
                         error!("Failed to start RQS: {e}");
-                        let _ = app_handle.emit("backend_error", e.to_string());
+                        drop(app_handle.emit("backend_error", e.to_string()));
                     }
                 }
             });
@@ -177,8 +177,8 @@ fn rs2js_endpointinfo(message: &EndpointInfo, manager: &AppHandle) {
 
 fn open_main_window(app_handle: &AppHandle) {
     if let Some(webview_window) = app_handle.get_webview_window("main") {
-        let _ = webview_window.show();
-        let _ = webview_window.set_focus();
+        drop(webview_window.show());
+        drop(webview_window.set_focus());
         return;
     }
 

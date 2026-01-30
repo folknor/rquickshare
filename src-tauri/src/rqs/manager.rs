@@ -78,14 +78,14 @@ impl TcpServer {
                                                 }
 
                                                 if ir.state.state != TransferState::Finished {
-                                                    let _ = esender.send(ChannelMessage {
+                                                    drop(esender.send(ChannelMessage {
                                                         id: remote_addr.to_string(),
                                                         msg: channel::Message::Client(MessageClient {
                                                             kind: TransferKind::Inbound,
                                                             state: Some(TransferState::Disconnected),
                                                             metadata: Default::default()
                                                         }),
-                                                    });
+                                                    }));
                                                 }
                                                 error!("{INNER_NAME}: error while handling client: {e} ({:?})", ir.state.state);
                                                 break;
@@ -145,14 +145,14 @@ impl TcpServer {
                                 }
 
                                 if or.state.state != TransferState::Finished && or.state.state != TransferState::Cancelled {
-                                    let _ = self.sender.clone().send(ChannelMessage {
+                                    drop(self.sender.clone().send(ChannelMessage {
                                         id: si.addr,
                                         msg: channel::Message::Client(MessageClient {
                                             kind: TransferKind::Outbound,
                                             state: Some(TransferState::Disconnected),
                                             metadata: Default::default()
                                         }),
-                                    });
+                                    }));
                                 }
                                 error!("{INNER_NAME}: error while handling client: {e} ({:?})", or.state.state);
                                 break;

@@ -1,3 +1,5 @@
+#![allow(clippy::let_underscore_must_use)] // Tauri macro generates code that triggers this
+
 use crate::AppState;
 
 #[tauri::command]

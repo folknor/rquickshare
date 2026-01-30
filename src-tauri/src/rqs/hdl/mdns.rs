@@ -20,18 +20,6 @@ pub enum Visibility {
     Temporarily = 2,
 }
 
-#[allow(dead_code)]
-impl Visibility {
-    pub fn from_raw_value(value: u64) -> Self {
-        match value {
-            0 => Visibility::Visible,
-            1 => Visibility::Invisible,
-            2 => Visibility::Temporarily,
-            _ => unreachable!(),
-        }
-    }
-}
-
 pub struct MDnsServer {
     daemon: ServiceDaemon,
     service_info: ServiceInfo,
@@ -86,7 +74,7 @@ impl MDnsServer {
                         self.daemon.register(self.service_info.clone())?;
                     } else if visibility == Visibility::Invisible {
                         let receiver = self.daemon.unregister(self.service_info.get_fullname())?;
-                        let _ = receiver.recv();
+                        drop(receiver.recv());
                     } else if visibility == Visibility::Temporarily {
                         self.daemon.register(self.service_info.clone())?;
                         interval.reset();
@@ -113,8 +101,8 @@ impl MDnsServer {
                     }
 
                     let receiver = self.daemon.unregister(self.service_info.get_fullname())?;
-                    let _ = receiver.recv();
-                    let _ = self.visibility_sender.lock().unwrap().send(Visibility::Invisible);
+                    drop(receiver.recv());
+                    drop(self.visibility_sender.lock().unwrap().send(Visibility::Invisible));
                 }
             }
         }
@@ -136,7 +124,10 @@ impl MDnsServer {
         // This `name` is going to be random every time RQS service restarts.
         // If that is not desired, derive host_name, etc. via some other means
         let name = gen_mdns_name(endpoint_id);
-        let device_name = DEVICE_NAME.read().unwrap().clone();
+        let device_name = DEVICE_NAME
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to read device name: {e}"))?
+            .clone();
         info!("Broadcasting with: device_name={device_name}, host_name={name}");
         let endpoint_info = gen_mdns_endpoint_info(device_type as u8, &device_name);
 

@@ -1263,14 +1263,14 @@ impl OutboundRequest {
             return;
         }
 
-        let _ = self.sender.send(ChannelMessage {
+        drop(self.sender.send(ChannelMessage {
             id: self.state.id.clone(),
             msg: channel::Message::Client(MessageClient {
                 kind: TransferKind::Outbound,
                 state: Some(self.state.state.clone()),
                 metadata: self.state.transfer_metadata.clone(),
             }),
-        });
+        }));
         // Add a small sleep timer to allow the Tokio runtime to have
         // some spare time to process channel's message. Otherwise it
         // get spammed by new requests. Currently set to 10 micro secs.

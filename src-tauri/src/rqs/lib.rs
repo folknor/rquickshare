@@ -108,7 +108,7 @@ impl RQS {
 
         // Define default visibility as per the args inside the new()
         let (visibility_sender, visibility_receiver) = watch::channel(Visibility::Invisible);
-        let _ = visibility_sender.send(visibility);
+        drop(visibility_sender.send(visibility));
 
         Self {
             tracker: None,
@@ -171,7 +171,7 @@ impl RQS {
             endpoint_id[..4].try_into()?,
             binded_addr.port(),
             self.ble_sender.subscribe(),
-            self.visibility_sender.clone(),
+            Arc::clone(&self.visibility_sender),
             self.visibility_receiver.clone(),
         )?;
         let ctk = ctoken.clone();

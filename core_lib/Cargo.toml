@@ -9,17 +9,23 @@ authors = ["martichou"]
 name = "core_bin"
 path = "src/bin.rs"
 
+[target.'cfg(target_os = "linux")']
+dev-dependencies = {}
+
 [target.'cfg(target_os = "linux")'.dependencies]
-bluer = { version = "0.17", features = ["full"], optional = true }
+bluer = { version = "0.17.4", features = ["full"], optional = true }
+
+[target.'cfg(all(target_arch = "aarch64", target_os = "linux"))']
+dev-dependencies = {}
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
-dbus = { version = "0.9", features = ["vendored"] }
+dbus = { version = "0.9.10", features = ["vendored"] }
 
 [dependencies]
-anyhow = "1.0"
+anyhow = "1.0.100"
 base64 = "0.22"
-btleplug = { version = "0.11", optional = true }
-bytes = "1.10"
+btleplug = { version = "0.11.8", optional = true }
+bytes = "1.11.0"
 directories = "6.0"
 futures = "0.3"
 get_if_addrs = "0.5"
@@ -27,18 +33,18 @@ hex = "0.4"
 hkdf = "0.12"
 hmac = "0.12"
 libaes = "0.7"
-log = "0.4"
+log = "0.4.29"
 mdns-sd = { git = "https://github.com/Martichou/mdns-sd", branch = "unsolicited" }
 mime_guess = "2.0"
 num-bigint = "0.4"
-once_cell = "1.20"
+once_cell = "1.21.3"
 p256 = { version = "0.13", features = ["ecdh"] }
-prost = "0.13"
-rand = "0.9"
-serde = { version = "1.0", features = ["derive"] }
-sha2 = "0.10"
+prost = "0.14.3"
+rand = "0.9.2"
+serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "0.10.9"
 sys_metrics = { git = "https://github.com/Martichou/sys_metrics" }
-tokio = { version = "1.43", features = [
+tokio = { version = "1.49.0", features = [
     "macros",
     "rt",
     "rt-multi-thread",
@@ -48,12 +54,12 @@ tokio = { version = "1.43", features = [
     "io-util",
     "signal",
 ] }
-tokio-util = { version = "0.7", features = ["rt"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = "1.15"
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+uuid = "1.20.0"
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14.3"
 
 [features]
 default = ["experimental"]

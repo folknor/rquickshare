@@ -156,6 +156,7 @@ pub fn hkdf_extract_expand(
     Ok(okm)
 }
 
+#[allow(clippy::cast_possible_wrap)] // Intentional: treating bytes as signed for hash calculation
 pub fn to_four_digit_string(bytes: &Vec<u8>) -> String {
     let k_hash_modulo = 9973;
     let k_hash_base_multiplier = 31;
@@ -163,7 +164,7 @@ pub fn to_four_digit_string(bytes: &Vec<u8>) -> String {
     let mut hash = 0;
     let mut multiplier = 1;
     for &byte in bytes {
-        let byte = byte as i8 as i32;
+        let byte = i32::from(byte as i8);
         hash = (hash + byte * multiplier) % k_hash_modulo;
         multiplier = (multiplier * k_hash_base_multiplier) % k_hash_modulo;
     }

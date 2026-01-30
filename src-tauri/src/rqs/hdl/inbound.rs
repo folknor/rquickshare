@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::os::unix::fs::FileExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -562,7 +562,8 @@ impl InboundRequest {
 
         let buffer_len = self.state.payload_buffers.get(&payload_id)
             .ok_or_else(|| anyhow!("Missing payload buffer"))?.len();
-        if chunk.offset() != buffer_len as i64 {
+        let buffer_len_i64 = i64::try_from(buffer_len).unwrap_or(i64::MAX);
+        if chunk.offset() != buffer_len_i64 {
             self.state.payload_buffers.remove(&payload_id);
             return Err(anyhow!(
                 "Unexpected chunk offset: {}, expected: {}",
@@ -624,10 +625,11 @@ impl InboundRequest {
         }
 
         let chunk_size = chunk.body().len();
-        if current_offset + chunk_size as i64 > file_internal.total_size {
+        let chunk_size_i64 = i64::try_from(chunk_size).unwrap_or(i64::MAX);
+        if current_offset + chunk_size_i64 > file_internal.total_size {
             return Err(anyhow!(
                 "Transferred file size exceeds previously specified value: {} vs {}",
-                current_offset + chunk_size as i64,
+                current_offset + chunk_size_i64,
                 file_internal.total_size
             ));
         }
@@ -636,7 +638,7 @@ impl InboundRequest {
             let file = file_internal.file.as_ref()
                 .ok_or_else(|| anyhow!("File handle not available"))?;
             file.write_all_at(chunk.body(), u64::try_from(current_offset).unwrap_or_default())?;
-            file_internal.bytes_transferred += chunk_size as i64;
+            file_internal.bytes_transferred += chunk_size_i64;
 
             self.update_state(
                 |e| {
@@ -852,193 +854,174 @@ impl InboundRequest {
             .ok_or_else(|| anyhow!("Missing required fields"))?;
 
         // No need to inform the channel here, we'll do it anyway with files info
-        self.update_state(
-            |e| {
-                e.state = TransferState::WaitingForUserConsent;
-            },
-            false,
-        )
-        .await;
+        self.update_state(|e| e.state = TransferState::WaitingForUserConsent, false)
+            .await;
 
         if !introduction.file_metadata.is_empty() && introduction.text_metadata.is_empty() {
-            trace!("process_introduction: handling file_metadata");
-            let mut files_name = Vec::with_capacity(introduction.file_metadata.len());
-            let mut total_bytes: u64 = 0;
-
-            for file in &introduction.file_metadata {
-                info!("File name: {}", file.name());
-
-                let mut dest = get_download_dir();
-                dest.push(file.name());
-
-                info!("Destination: {dest:?}");
-                if dest.exists() {
-                    let mut counter = 1;
-                    dest.pop();
-
-                    loop {
-                        // How name conflict resolution happens in most software,
-                        // lorem.txt
-                        // lorem (1).txt
-                        // ...
-                        let incremented_file_path = {
-                            let file_path = PathBuf::from(file.name());
-
-                            let incremented_file_stem = format!(
-                                "{} ({counter})",
-                                file_path
-                                    .file_stem()
-                                    .and_then(|it| it.to_str())
-                                    .expect("Must be UTF-8 since Path is derived from String"),
-                            );
-
-                            let incremented_file_path =
-                                file_path.with_file_name(incremented_file_stem);
-
-                            file_path
-                                .extension()
-                                .map(|it| incremented_file_path.with_extension(it))
-                                .unwrap_or_else(|| incremented_file_path)
-                        };
-
-                        dest.push(incremented_file_path);
-                        if !dest.exists() {
-                            break;
-                        }
-                        dest.pop();
-                        counter += 1;
-                    }
-
-                    info!("New destination: {dest:?}");
-                }
-
-                let info = InternalFileInfo {
-                    payload_id: file.payload_id(),
-                    file_url: dest,
-                    bytes_transferred: 0,
-                    total_size: file.size(),
-                    file: None,
-                };
-                total_bytes += u64::try_from(info.total_size).unwrap_or_default();
-                self.state.transferred_files.insert(file.payload_id(), info);
-                files_name.push(file.name().to_owned());
-            }
-
-            let metadata = TransferMetadata {
-                id: self.state.id.clone(),
-                source: self.state.remote_device_info.clone(),
-                payload_kind: TransferPayloadKind::Files,
-                payload_preview: Default::default(),
-                payload: Some(TransferPayload::Files(files_name)),
-                pin_code: self.state.pin_code.clone(),
-                total_bytes,
-                ack_bytes: Default::default(),
-            };
-
-            info!("Asking for user consent: {metadata:?}");
-            self.update_state(
-                |e| {
-                    e.transfer_metadata = Some(metadata);
-                },
-                true,
-            )
-            .await;
+            self.process_file_introduction(&introduction.file_metadata).await
         } else if introduction.text_metadata.len() == 1 {
-            trace!("process_introduction: handling text_metadata");
             let meta = introduction.text_metadata.first()
                 .ok_or_else(|| anyhow!("Missing text_metadata"))?;
-
-            match meta.r#type() {
-                text_metadata::Type::Url => {
-                    let metadata = TransferMetadata {
-                        id: self.state.id.clone(),
-                        source: self.state.remote_device_info.clone(),
-                        payload_kind: TransferPayloadKind::Url,
-                        payload_preview: Some(meta.text_title.clone().unwrap_or_default()),
-                        pin_code: self.state.pin_code.clone(),
-                        payload: Default::default(),
-                        total_bytes: Default::default(),
-                        ack_bytes: Default::default(),
-                    };
-
-                    info!("Asking for user consent: {metadata:?}");
-                    self.update_state(
-                        |e| {
-                            e.text_payload = Some(TextPayloadInfo::Url(meta.payload_id()));
-                            e.transfer_metadata = Some(metadata);
-                        },
-                        true,
-                    )
-                    .await;
-                }
-                text_metadata::Type::PhoneNumber
-                | text_metadata::Type::Address
-                | text_metadata::Type::Text => {
-                    let metadata = TransferMetadata {
-                        id: self.state.id.clone(),
-                        source: self.state.remote_device_info.clone(),
-                        payload_kind: TransferPayloadKind::Text,
-                        payload_preview: Some(meta.text_title.clone().unwrap_or_default()),
-                        pin_code: self.state.pin_code.clone(),
-                        payload: Default::default(),
-                        total_bytes: Default::default(),
-                        ack_bytes: Default::default(),
-                    };
-
-                    info!("Asking for user consent: {metadata:?}");
-                    self.update_state(
-                        |e| {
-                            e.text_payload = Some(TextPayloadInfo::Text(meta.payload_id()));
-                            e.transfer_metadata = Some(metadata);
-                        },
-                        true,
-                    )
-                    .await;
-                }
-                text_metadata::Type::Unknown => {
-                    // Reject transfer
-                    self.reject_transfer(Some(
-						sharing_nearby::connection_response_frame::Status::UnsupportedAttachmentType,
-					))
-					.await?;
-                }
-            }
+            self.process_text_introduction(meta).await
         } else if introduction.wifi_credentials_metadata.len() == 1 {
-            trace!("process_introduction: handling wifi_credentials_metadata");
             let meta = introduction.wifi_credentials_metadata.first()
                 .ok_or_else(|| anyhow!("Missing wifi_credentials_metadata"))?;
-
-            let metadata = TransferMetadata {
-                id: self.state.id.clone(),
-                source: self.state.remote_device_info.clone(),
-                payload_kind: TransferPayloadKind::WiFi,
-                payload_preview: Some(meta.ssid.clone().unwrap_or_default()),
-                pin_code: self.state.pin_code.clone(),
-                payload: Default::default(),
-                total_bytes: Default::default(),
-                ack_bytes: Default::default(),
-            };
-
-            self.update_state(
-                |e| {
-                    e.text_payload = Some(TextPayloadInfo::Wifi((
-                        meta.payload_id(),
-                        meta.ssid().to_owned(),
-                        meta.security_type(),
-                    )));
-                    e.transfer_metadata = Some(metadata);
-                },
-                true,
-            )
-            .await;
+            self.process_wifi_introduction(meta).await
         } else {
-            // Reject transfer
             self.reject_transfer(Some(
                 sharing_nearby::connection_response_frame::Status::UnsupportedAttachmentType,
             ))
-            .await?;
+            .await
+        }
+    }
+
+    /// Resolve filename conflicts by appending (1), (2), etc.
+    fn resolve_filename_conflict(base_dir: &Path, file_name: &str) -> PathBuf {
+        let mut dest = base_dir.to_path_buf();
+        dest.push(file_name);
+
+        if !dest.exists() {
+            return dest;
         }
 
+        dest.pop();
+        let file_path = PathBuf::from(file_name);
+        let stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+        let ext = file_path.extension();
+
+        for counter in 1.. {
+            let new_stem = format!("{stem} ({counter})");
+            let new_name = match ext {
+                Some(e) => PathBuf::from(new_stem).with_extension(e),
+                None => PathBuf::from(new_stem),
+            };
+            dest.push(new_name);
+            if !dest.exists() {
+                return dest;
+            }
+            dest.pop();
+        }
+
+        dest // Unreachable in practice
+    }
+
+    async fn process_file_introduction(
+        &mut self,
+        file_metadata: &[sharing_nearby::FileMetadata],
+    ) -> Result<(), anyhow::Error> {
+        trace!("process_introduction: handling file_metadata");
+        let mut files_name = Vec::with_capacity(file_metadata.len());
+        let mut total_bytes: u64 = 0;
+        let download_dir = get_download_dir();
+
+        for file in file_metadata {
+            info!("File name: {}", file.name());
+            let dest = Self::resolve_filename_conflict(&download_dir, file.name());
+            info!("Destination: {dest:?}");
+
+            let info = InternalFileInfo {
+                payload_id: file.payload_id(),
+                file_url: dest,
+                bytes_transferred: 0,
+                total_size: file.size(),
+                file: None,
+            };
+            total_bytes += u64::try_from(info.total_size).unwrap_or_default();
+            self.state.transferred_files.insert(file.payload_id(), info);
+            files_name.push(file.name().to_owned());
+        }
+
+        let metadata = TransferMetadata {
+            id: self.state.id.clone(),
+            source: self.state.remote_device_info.clone(),
+            payload_kind: TransferPayloadKind::Files,
+            payload_preview: Default::default(),
+            payload: Some(TransferPayload::Files(files_name)),
+            pin_code: self.state.pin_code.clone(),
+            total_bytes,
+            ack_bytes: Default::default(),
+        };
+
+        info!("Asking for user consent: {metadata:?}");
+        self.update_state(|e| e.transfer_metadata = Some(metadata), true).await;
+        Ok(())
+    }
+
+    async fn process_text_introduction(
+        &mut self,
+        meta: &sharing_nearby::TextMetadata,
+    ) -> Result<(), anyhow::Error> {
+        trace!("process_introduction: handling text_metadata");
+
+        let (payload_kind, text_payload) = match meta.r#type() {
+            text_metadata::Type::Url => {
+                (TransferPayloadKind::Url, TextPayloadInfo::Url(meta.payload_id()))
+            }
+            text_metadata::Type::PhoneNumber
+            | text_metadata::Type::Address
+            | text_metadata::Type::Text => {
+                (TransferPayloadKind::Text, TextPayloadInfo::Text(meta.payload_id()))
+            }
+            text_metadata::Type::Unknown => {
+                return self.reject_transfer(Some(
+                    sharing_nearby::connection_response_frame::Status::UnsupportedAttachmentType,
+                ))
+                .await;
+            }
+        };
+
+        let metadata = TransferMetadata {
+            id: self.state.id.clone(),
+            source: self.state.remote_device_info.clone(),
+            payload_kind,
+            payload_preview: Some(meta.text_title.clone().unwrap_or_default()),
+            pin_code: self.state.pin_code.clone(),
+            payload: Default::default(),
+            total_bytes: Default::default(),
+            ack_bytes: Default::default(),
+        };
+
+        info!("Asking for user consent: {metadata:?}");
+        self.update_state(
+            |e| {
+                e.text_payload = Some(text_payload);
+                e.transfer_metadata = Some(metadata);
+            },
+            true,
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn process_wifi_introduction(
+        &mut self,
+        meta: &sharing_nearby::WifiCredentialsMetadata,
+    ) -> Result<(), anyhow::Error> {
+        trace!("process_introduction: handling wifi_credentials_metadata");
+
+        let metadata = TransferMetadata {
+            id: self.state.id.clone(),
+            source: self.state.remote_device_info.clone(),
+            payload_kind: TransferPayloadKind::WiFi,
+            payload_preview: Some(meta.ssid.clone().unwrap_or_default()),
+            pin_code: self.state.pin_code.clone(),
+            payload: Default::default(),
+            total_bytes: Default::default(),
+            ack_bytes: Default::default(),
+        };
+
+        self.update_state(
+            |e| {
+                e.text_payload = Some(TextPayloadInfo::Wifi((
+                    meta.payload_id(),
+                    meta.ssid().to_owned(),
+                    meta.security_type(),
+                )));
+                e.transfer_metadata = Some(metadata);
+            },
+            true,
+        )
+        .await;
         Ok(())
     }
 
@@ -1223,11 +1206,12 @@ impl InboundRequest {
     ) -> Result<(), anyhow::Error> {
         let frame_data = frame.encode_to_vec();
         let body_size = frame_data.len();
+        let body_size_i64 = i64::try_from(body_size).unwrap_or(i64::MAX);
 
         let payload_header = PayloadHeader {
             id: Some(rand::rng().random_range(i64::MIN..i64::MAX)),
             r#type: Some(payload_header::PayloadType::Bytes.into()),
-            total_size: Some(body_size as i64),
+            total_size: Some(body_size_i64),
             is_sensitive: Some(false),
             ..Default::default()
         };
@@ -1261,7 +1245,7 @@ impl InboundRequest {
         let transfer = PayloadTransferFrame {
             packet_type: Some(PacketType::Data.into()),
             payload_chunk: Some(PayloadChunk {
-                offset: Some(body_size as i64),
+                offset: Some(body_size_i64),
                 flags: Some(1), // lastChunk
                 body: Some(vec![]),
             }),

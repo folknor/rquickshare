@@ -7,7 +7,9 @@
 - [x] `unwrap_used` — Replace all `.unwrap()` calls with proper error handling
 - [x] `cast_possible_truncation` — Audit all numeric casts for potential truncation
 - [x] `cast_sign_loss` — Audit all signed-to-unsigned casts
+- [x] `cast_possible_wrap` — Audit all usize/u64 to i64 casts
 - [x] `cognitive_complexity` — Refactor complex functions into smaller units
+- [x] `too_many_lines` — Keep functions under 100 lines
 
 ## Dependency Optimizations
 

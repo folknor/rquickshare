@@ -409,6 +409,7 @@ impl OutboundRequest {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn decrypt_and_process_secure_message(
         &mut self,
         smsg: &SecureMessage,
@@ -485,7 +486,8 @@ impl OutboundRequest {
                         // Get the current length of the buffer, if it exists, without holding a mutable borrow.
                         let buffer_len = self.state.payload_buffers.get(&payload_id)
                             .ok_or_else(|| anyhow!("Missing payload buffer"))?.len();
-                        if chunk.offset() != buffer_len as i64 {
+                        let buffer_len_i64 = i64::try_from(buffer_len).unwrap_or(i64::MAX);
+                        if chunk.offset() != buffer_len_i64 {
                             self.state.payload_buffers.remove(&payload_id);
                             return Err(anyhow!(
                                 "Unexpected chunk offset: {}, expected: {}",
@@ -674,10 +676,11 @@ impl OutboundRequest {
                     let fname = path
                         .file_name()
                         .ok_or_else(|| anyhow!("Failed to get file_name for {f}"))?;
+                    let file_size = i64::try_from(fmetadata.size()).unwrap_or(i64::MAX);
                     let fmeta = FileMetadata {
                         payload_id: Some(rand::rng().random::<i64>()),
                         name: Some(fname.to_string_lossy().into_owned()),
-                        size: Some(fmetadata.size() as i64),
+                        size: Some(file_size),
                         mime_type: Some(ftype),
                         r#type: Some(meta_type.into()),
                         ..Default::default()
@@ -751,6 +754,7 @@ impl OutboundRequest {
 
     /// Send a single file chunk and update state.
     /// Returns Ok(true) if more chunks to send, Ok(false) if file complete or should break.
+    #[allow(clippy::too_many_lines)]
     async fn send_file_chunk(&mut self, file_id: i64) -> Result<bool, anyhow::Error> {
         // Workaround to limit scope of the immutable borrow on self
         let chunk_info = {
@@ -793,6 +797,7 @@ impl OutboundRequest {
         let Some((curr_state, buffer, bytes_read)) = chunk_info else {
             return Ok(false);
         };
+        let bytes_read_i64 = i64::try_from(bytes_read).unwrap_or(i64::MAX);
 
         info!(
             "> File ready: {bytes_read} bytes, left to send: {}, offset: {}",
@@ -833,7 +838,7 @@ impl OutboundRequest {
         self.update_state(
             |e| {
                 if let Some(mu) = e.transferred_files.get_mut(&file_id) {
-                    mu.bytes_transferred += bytes_read as i64;
+                    mu.bytes_transferred += bytes_read_i64;
                 }
                 if let Some(tmd) = e.transfer_metadata.as_mut() {
                     tmd.ack_bytes += bytes_read as u64;
@@ -843,10 +848,10 @@ impl OutboundRequest {
         ).await;
 
         // Check if this was the last chunk
-        if curr_state.bytes_transferred + bytes_read as i64 == curr_state.total_size {
+        if curr_state.bytes_transferred + bytes_read_i64 == curr_state.total_size {
             debug!(
                 "File {file_id} finished, offset: {} / total: {}",
-                curr_state.bytes_transferred + bytes_read as i64,
+                curr_state.bytes_transferred + bytes_read_i64,
                 curr_state.total_size
             );
 
@@ -1070,11 +1075,12 @@ impl OutboundRequest {
     ) -> Result<(), anyhow::Error> {
         let frame_data = frame.encode_to_vec();
         let body_size = frame_data.len();
+        let body_size_i64 = i64::try_from(body_size).unwrap_or(i64::MAX);
 
         let payload_header = PayloadHeader {
             id: Some(rand::rng().random_range(i64::MIN..i64::MAX)),
             r#type: Some(payload_header::PayloadType::Bytes.into()),
-            total_size: Some(body_size as i64),
+            total_size: Some(body_size_i64),
             is_sensitive: Some(false),
             ..Default::default()
         };
@@ -1108,7 +1114,7 @@ impl OutboundRequest {
         let transfer = PayloadTransferFrame {
             packet_type: Some(PacketType::Data.into()),
             payload_chunk: Some(PayloadChunk {
-                offset: Some(body_size as i64),
+                offset: Some(body_size_i64),
                 flags: Some(1), // lastChunk
                 body: Some(vec![]),
             }),

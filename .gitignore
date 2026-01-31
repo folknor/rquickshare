@@ -21,3 +21,6 @@ Thumbs.db
 
 # Test artifacts
 *.snap
+
+# Documentation (internal notes, decompiled APK analysis)
+docs/

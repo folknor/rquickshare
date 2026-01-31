@@ -178,7 +178,7 @@ impl MDnsServer {
         } else {
             local_ips
                 .iter()
-                .map(|ip| ip.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",")
         };

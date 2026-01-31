@@ -21,7 +21,7 @@ use crate::channel::{self, ChannelMessage, MessageClient, TransferAction, Transf
 use crate::hdl::TextPayloadInfo;
 use crate::hdl::info::{InternalFileInfo, TransferMetadata, TransferPayload, TransferPayloadKind};
 use crate::location_nearby_connections::payload_transfer_frame::{
-    PacketType, PayloadChunk, PayloadHeader, payload_header,
+    ControlMessage, PacketType, PayloadChunk, PayloadHeader, control_message, payload_header,
 };
 use crate::location_nearby_connections::{KeepAliveFrame, OfflineFrame, PayloadTransferFrame};
 use crate::securegcm::ukey2_alert::AlertType;
@@ -442,6 +442,8 @@ impl InboundRequest {
 					os_info: Some(location_nearby_connections::OsInfo {
 						r#type: Some(location_nearby_connections::os_info::OsType::Linux.into())
 					}),
+					// Version 6+ indicates PAYLOAD_RECEIVED_ACK support
+					nearby_connections_version: Some(6),
 					..Default::default()
 				}),
 				..Default::default()
@@ -654,13 +656,14 @@ impl InboundRequest {
                 true,
             ).await;
         } else if (chunk.flags() & 1) == 1 {
-            // Final chunk marker
+            // Final chunk marker - send ACK to sender before removing from tracking
+            self.send_payload_received_ack(payload_id).await?;
+
             self.state.transferred_files.remove(&payload_id);
             if self.state.transferred_files.is_empty() {
-                info!("Transfer finished");
+                info!("All files received, transfer finished");
                 self.update_state(|e| { e.state = TransferState::Finished; }, true).await;
-                self.disconnection().await?;
-                return Err(anyhow!(crate::errors::AppError::NotAnError));
+                // Don't disconnect - wait for sender to request safe disconnect
             }
         }
 
@@ -1155,6 +1158,65 @@ impl InboundRequest {
         } else {
             self.send_frame(frame.encode_to_vec()).await
         }
+    }
+
+    /// Send PAYLOAD_RECEIVED_ACK control message to sender after receiving a complete file.
+    /// This tells the sender we've received all the data for this payload.
+    /// Retries up to 3 times with 50ms delay between attempts (matching Google's implementation).
+    async fn send_payload_received_ack(&mut self, payload_id: i64) -> Result<(), anyhow::Error> {
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY_MS: u64 = 50;
+
+        info!("Sending PAYLOAD_RECEIVED_ACK for payload {payload_id}");
+
+        let frame = location_nearby_connections::OfflineFrame {
+            version: Some(location_nearby_connections::offline_frame::Version::V1.into()),
+            v1: Some(location_nearby_connections::V1Frame {
+                r#type: Some(
+                    location_nearby_connections::v1_frame::FrameType::PayloadTransfer.into(),
+                ),
+                payload_transfer: Some(PayloadTransferFrame {
+                    packet_type: Some(PacketType::Control.into()),
+                    payload_header: Some(PayloadHeader {
+                        id: Some(payload_id),
+                        r#type: Some(payload_header::PayloadType::File.into()),
+                        ..Default::default()
+                    }),
+                    control_message: Some(ControlMessage {
+                        event: Some(control_message::EventType::PayloadReceivedAck.into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let mut last_error = None;
+        for attempt in 1..=MAX_RETRIES {
+            let result = if self.state.encryption_done {
+                self.encrypt_and_send(&frame).await
+            } else {
+                self.send_frame(frame.encode_to_vec()).await
+            };
+
+            match result {
+                Ok(()) => {
+                    debug!("PAYLOAD_RECEIVED_ACK sent successfully on attempt {attempt}");
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Failed to send PAYLOAD_RECEIVED_ACK (attempt {attempt}/{MAX_RETRIES}): {e}");
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES {
+                        tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                    }
+                }
+            }
+        }
+
+        // All retries failed, return the last error
+        Err(last_error.unwrap_or_else(|| anyhow!("Failed to send PAYLOAD_RECEIVED_ACK after {MAX_RETRIES} attempts")))
     }
 
     /// Send disconnect acknowledgment (sends ack_safe_to_disconnect: true)

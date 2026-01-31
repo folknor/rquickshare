@@ -52,9 +52,11 @@ type HmacSha256 = Hmac<Sha256>;
 const SANE_FRAME_LENGTH: i32 = 5 * 1024 * 1024;
 const SANITY_DURATION: Duration = Duration::from_micros(10);
 
-/// Timeout for waiting for PAYLOAD_RECEIVED_ACK and ack_safe_to_disconnect
-/// Google uses 30 seconds for ACK and 10 seconds for disconnect, we use 10 for the whole process
-const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for waiting for PAYLOAD_RECEIVED_ACK (Google uses 30 seconds)
+const ACK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Additional timeout for waiting for ack_safe_to_disconnect after ACKs received (Google uses 10 seconds)
+const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum OutboundPayload {
@@ -106,10 +108,15 @@ impl OutboundRequest {
     }
 
     pub async fn handle(&mut self) -> Result<(), anyhow::Error> {
-        // Check for ACK timeout
+        // Check for timeout based on current state
         if let Some(started) = self.state.ack_wait_started {
-            if started.elapsed() > ACK_TIMEOUT {
-                info!("ACK timeout reached, finishing transfer");
+            let timeout = match self.state.state {
+                TransferState::WaitingForPayloadAck => ACK_TIMEOUT,
+                TransferState::WaitingForDisconnectAck => DISCONNECT_TIMEOUT,
+                _ => ACK_TIMEOUT,
+            };
+            if started.elapsed() > timeout {
+                info!("Timeout reached in state {:?}, finishing transfer", self.state.state);
                 self.update_state(|e| { e.state = TransferState::Finished; }, true).await;
                 return Err(anyhow!(crate::errors::AppError::NotAnError));
             }
@@ -118,7 +125,7 @@ impl OutboundRequest {
         // Buffer for the 4-byte length
         let mut length_buf = [0u8; 4];
 
-        // Use a shorter timeout when waiting for ACKs to allow periodic timeout checks
+        // Use a shorter timeout when waiting for ACKs/disconnect to allow periodic timeout checks
         let read_timeout = if self.state.ack_wait_started.is_some() {
             Duration::from_secs(1)
         } else {
@@ -388,6 +395,8 @@ impl OutboundRequest {
 					os_info: Some(location_nearby_connections::OsInfo {
 						r#type: Some(location_nearby_connections::os_info::OsType::Linux.into())
 					}),
+					// Version 6+ indicates PAYLOAD_RECEIVED_ACK support
+					nearby_connections_version: Some(6),
 					..Default::default()
 				}),
                 ..Default::default()
@@ -441,7 +450,7 @@ impl OutboundRequest {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     async fn decrypt_and_process_secure_message(
         &mut self,
         smsg: &SecureMessage,
@@ -511,6 +520,8 @@ impl OutboundRequest {
                                     info!("All payload ACKs received, requesting safe disconnect");
                                     self.update_state(|e| {
                                         e.state = TransferState::WaitingForDisconnectAck;
+                                        // Reset timer for disconnect phase
+                                        e.ack_wait_started = Some(std::time::Instant::now());
                                     }, false).await;
                                     self.request_disconnection().await?;
                                 }
@@ -1006,6 +1017,8 @@ impl OutboundRequest {
             info!("No payloads to wait for, requesting safe disconnect");
             self.update_state(|e| {
                 e.state = TransferState::WaitingForDisconnectAck;
+                // Reset timer for disconnect phase
+                e.ack_wait_started = Some(std::time::Instant::now());
             }, false).await;
             self.request_disconnection().await?;
         }

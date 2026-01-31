@@ -72,6 +72,11 @@ impl TcpServer {
                         Ok((socket, remote_addr)) => {
                             trace!("{INNER_NAME}: new client: {remote_addr}");
 
+                            // Set TCP socket options for better performance
+                            if let Err(e) = socket.set_nodelay(true) {
+                                warn!("{INNER_NAME}: failed to set TCP_NODELAY: {e}");
+                            }
+
                             // Try to acquire connection permit (non-blocking)
                             let permit = match CONNECTION_SEMAPHORE.try_acquire() {
                                 Ok(permit) => permit,
@@ -134,6 +139,11 @@ impl TcpServer {
     pub async fn connect(&self, ctk: CancellationToken, si: SendInfo) -> Result<(), anyhow::Error> {
         debug!("{INNER_NAME}: Connecting to: {}", si.addr);
         let socket = TcpStream::connect(si.addr.clone()).await?;
+
+        // Set TCP socket options for better performance
+        if let Err(e) = socket.set_nodelay(true) {
+            warn!("{INNER_NAME}: failed to set TCP_NODELAY: {e}");
+        }
 
         let mut or = OutboundRequest::new(
             self.endpoint_id,

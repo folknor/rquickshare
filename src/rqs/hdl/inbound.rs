@@ -197,10 +197,22 @@ impl InboundRequest {
                 )
                 .await;
             }
-            _ => {
-                debug!("Handling SecureMessage frame");
+            // Only process encrypted messages after key exchange is complete
+            TransferState::SentConnectionResponse
+            | TransferState::SentPairedKeyResult
+            | TransferState::ReceivedPairedKeyResult
+            | TransferState::WaitingForUserConsent
+            | TransferState::ReceivingFiles => {
+                debug!("Handling SecureMessage frame in state {:?}", current_state.state);
                 let smsg = SecureMessage::decode(&*frame_data)?;
                 self.decrypt_and_process_secure_message(&smsg).await?;
+            }
+            // Reject messages in invalid states
+            _ => {
+                return Err(anyhow!(
+                    "Unexpected message in state {:?}",
+                    current_state.state
+                ));
             }
         }
 
@@ -881,18 +893,45 @@ impl InboundRequest {
         }
     }
 
+    /// Sanitize file name by replacing dangerous characters.
+    /// Prevents path traversal and filesystem issues.
+    fn sanitize_filename(name: &str) -> String {
+        // Replace dangerous characters: / \ ? % * : | " < > =
+        // Also handle path traversal attempts
+        let sanitized: String = name
+            .chars()
+            .map(|c| match c {
+                '/' | '\\' | '?' | '%' | '*' | ':' | '|' | '"' | '<' | '>' | '=' => '_',
+                _ => c,
+            })
+            .collect();
+
+        // Remove any remaining path components (.. or leading /)
+        let sanitized = sanitized.trim_start_matches('.');
+        let sanitized = sanitized.trim_start_matches('/');
+        let sanitized = sanitized.trim_start_matches('\\');
+
+        // If empty after sanitization, use a default name
+        if sanitized.is_empty() {
+            "unnamed_file".to_string()
+        } else {
+            sanitized.to_string()
+        }
+    }
+
     /// Resolve filename conflicts by appending (1), (2), etc.
     fn resolve_filename_conflict(base_dir: &Path, file_name: &str) -> PathBuf {
+        let safe_name = Self::sanitize_filename(file_name);
         let mut dest = base_dir.to_path_buf();
-        dest.push(file_name);
+        dest.push(&safe_name);
 
         if !dest.exists() {
             return dest;
         }
 
         dest.pop();
-        let file_path = PathBuf::from(file_name);
-        let stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+        let file_path = PathBuf::from(&safe_name);
+        let stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or(&safe_name);
         let ext = file_path.extension();
 
         for counter in 1.. {

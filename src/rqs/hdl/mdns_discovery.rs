@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -8,6 +10,42 @@ use tokio_util::sync::CancellationToken;
 
 use crate::utils::{is_not_self_ip, parse_mdns_endpoint_info};
 use crate::DeviceType;
+
+/// Expected Service ID bytes in Quick Share mDNS names (positions 5-7)
+const SERVICE_ID: [u8; 3] = [0xFC, 0x9F, 0x5E];
+
+/// Validate that a service name contains the correct Quick Share Service ID.
+/// Service name is base64url encoded, 10 bytes:
+/// [0]: PCP marker (0x23)
+/// [1-4]: endpoint ID (random)
+/// [5-7]: Service ID (must be 0xFC, 0x9F, 0x5E)
+/// [8-9]: padding (0x00, 0x00)
+fn is_valid_quickshare_service(fullname: &str) -> bool {
+    // Extract service name (first component before the first '.')
+    let service_name = match fullname.split('.').next() {
+        Some(name) => name,
+        None => return false,
+    };
+
+    // Decode from base64url
+    let decoded = match URL_SAFE_NO_PAD.decode(service_name) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+
+    // Must be at least 8 bytes to contain PCP marker + endpoint ID + service ID
+    if decoded.len() < 8 {
+        return false;
+    }
+
+    // Check PCP marker at byte 0
+    if decoded[0] != 0x23 {
+        return false;
+    }
+
+    // Check Service ID at bytes 5-7
+    decoded[5..8] == SERVICE_ID
+}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct EndpointInfo {
@@ -83,6 +121,13 @@ impl MDnsDiscovery {
 
                                     let ip_port = format!("{ip}:{port}");
                                     let fullname = info.get_fullname().to_string();
+
+                                    // Validate Service ID to ensure this is a real Quick Share service
+                                    if !is_valid_quickshare_service(&fullname) {
+                                        debug!("MDnsDiscovery: Invalid service ID in {fullname}, skipping");
+                                        continue;
+                                    }
+
                                     if TcpStream::connect(&ip_port).await.is_ok() {
                                         let ei = EndpointInfo {
                                             fullname: fullname.clone(),

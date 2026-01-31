@@ -54,7 +54,12 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # GUI (egui)
-eframe = "0.33"
+eframe = { version = "0.33", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "persistence",
+    "wayland",
+] }
 rfd = "0.17"
 catppuccin-egui = { version = "5.7", default-features = false, features = ["egui33"] }
 

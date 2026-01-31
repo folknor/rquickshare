@@ -13,12 +13,15 @@ use tokio::sync::broadcast;
 enum GuiMessage {
     Channel(ChannelMessage),
     Endpoint(EndpointInfo),
+    FilesPicked(EndpointInfo, Vec<String>),
 }
 
 // Catppuccin Mocha palette
 mod theme {
     use eframe::egui::Color32;
 
+    pub const CRUST: Color32 = Color32::from_rgb(17, 17, 27);
+    pub const MANTLE: Color32 = Color32::from_rgb(24, 24, 37);
     pub const BASE: Color32 = Color32::from_rgb(30, 30, 46);
     pub const SURFACE1: Color32 = Color32::from_rgb(69, 71, 90);
     pub const TEXT: Color32 = Color32::from_rgb(205, 214, 244);
@@ -35,8 +38,10 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 450.0])
-            .with_min_inner_size([300.0, 350.0]),
+            .with_inner_size([344.0, 350.0])
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_app_id("kvakk"),
         ..Default::default()
     };
 
@@ -79,6 +84,7 @@ struct InboundTransfer {
 
 struct KvakkApp {
     device_name: String,
+    tx: mpsc::Sender<GuiMessage>,
     rx: mpsc::Receiver<GuiMessage>,
     cmd_tx: Option<broadcast::Sender<ChannelMessage>>,
     send_tx: Option<tokio::sync::mpsc::Sender<SendInfo>>,
@@ -91,6 +97,7 @@ struct KvakkApp {
 impl KvakkApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = mpsc::channel();
+        let tx_for_struct = tx.clone();
         let (init_tx, init_rx) = std::sync::mpsc::channel::<(
             broadcast::Sender<ChannelMessage>,
             tokio::sync::mpsc::Sender<SendInfo>,
@@ -161,6 +168,7 @@ impl KvakkApp {
 
         Self {
             device_name,
+            tx: tx_for_struct,
             rx,
             cmd_tx,
             send_tx,
@@ -176,6 +184,11 @@ impl KvakkApp {
             match gui_msg {
                 GuiMessage::Channel(msg) => self.handle_channel_message(&msg),
                 GuiMessage::Endpoint(endpoint) => self.handle_endpoint(endpoint),
+                GuiMessage::FilesPicked(endpoint, files) => {
+                    if !files.is_empty() {
+                        self.send_files_to(&endpoint, files);
+                    }
+                }
             }
         }
     }
@@ -309,35 +322,49 @@ impl KvakkApp {
 
     fn draw_device_circle(&self, ui: &mut egui::Ui, endpoint: &EndpointInfo) -> bool {
         let name = endpoint.name.as_deref().unwrap_or("Unknown");
-        let mut clicked = false;
 
-        ui.vertical(|ui| {
-            ui.set_width(80.0);
+        // Truncate long names with ellipsis
+        let max_chars = 12;
+        let display_name = if name.chars().count() > max_chars {
+            format!("{}…", name.chars().take(max_chars - 1).collect::<String>())
+        } else {
+            name.to_string()
+        };
 
-            let (rect, response) = ui.allocate_exact_size(egui::vec2(60.0, 60.0), egui::Sense::click());
+        // Fixed size container, centered content
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(80.0, 80.0), egui::Sense::click());
 
-            if response.clicked() {
-                clicked = true;
-            }
+        // Circle in upper portion
+        let circle_center = egui::pos2(rect.center().x, rect.top() + 30.0);
+        let color = if response.hovered() { theme::BLUE } else { theme::SURFACE1 };
+        ui.painter().circle_filled(circle_center, 26.0, color);
 
-            let color = if response.hovered() { theme::BLUE } else { theme::SURFACE1 };
-            ui.painter().circle_filled(rect.center(), 30.0, color);
+        // Initial letter
+        let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+        ui.painter().text(
+            circle_center,
+            egui::Align2::CENTER_CENTER,
+            initial,
+            egui::FontId::proportional(22.0),
+            theme::TEXT,
+        );
 
-            // First letter of name
-            let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                initial,
-                egui::FontId::proportional(24.0),
-                theme::TEXT,
-            );
+        // Device name below circle
+        let text_pos = egui::pos2(rect.center().x, rect.top() + 68.0);
+        ui.painter().text(
+            text_pos,
+            egui::Align2::CENTER_CENTER,
+            &display_name,
+            egui::FontId::proportional(11.0),
+            theme::TEXT,
+        );
 
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(name).size(12.0).color(theme::TEXT));
-        });
+        // Show full name on hover if truncated
+        if name.chars().count() > max_chars {
+            response.clone().on_hover_text(name);
+        }
 
-        clicked
+        response.clicked()
     }
 }
 
@@ -346,36 +373,55 @@ impl eframe::App for KvakkApp {
         self.process_messages();
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::BASE).inner_margin(egui::Margin::same(16)))
+            .frame(egui::Frame::NONE.fill(theme::CRUST))
             .show(ctx, |ui| {
-                // Header: device name
-                ui.vertical_centered(|ui| {
-                    ui.label(egui::RichText::new(&self.device_name)
-                        .size(18.0)
-                        .strong()
-                        .color(theme::TEXT));
-                });
-                ui.add_space(20.0);
+                // Custom title bar
+                self.draw_title_bar(ui);
 
-                // Main content area
-                let available_height = ui.available_height() - 40.0; // Reserve space for footer
-
-                egui::Frame::new()
+                // Main content area with padding
+                egui::Frame::NONE
                     .fill(theme::BASE)
+                    .inner_margin(16.0)
                     .show(ui, |ui| {
-                        ui.set_min_height(available_height);
+                        // HEADER
+                        ui.push_id("header", |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.label(egui::RichText::new(&self.device_name)
+                                    .size(18.0)
+                                    .strong()
+                                    .color(theme::TEXT));
+                            });
+                        });
+                        ui.add_space(12.0);
 
-                        // Check if we have an active outbound transfer (overlay)
-                        if self.outbound.is_some() {
-                            self.draw_send_overlay(ui);
-                        } else {
-                            self.draw_device_grid(ui);
-                        }
+                        // DEVICE GRID (darker background)
+                        let footer_space = 40.0; // space for footer + margin
+                        let grid_height = ui.available_height() - footer_space;
+                        let content_height = grid_height - 32.0; // subtract inner_margin (16*2)
+
+                        ui.push_id("device_grid", |ui| {
+                            let full_width = ui.available_width();
+                            egui::Frame::NONE
+                                .fill(theme::MANTLE)
+                                .inner_margin(16.0)
+                                .show(ui, |ui| {
+                                    ui.set_min_width(full_width - 32.0);
+                                    ui.set_min_height(content_height);
+                                    ui.set_max_height(content_height);
+                                    if self.outbound.is_some() {
+                                        self.draw_send_overlay(ui);
+                                    } else {
+                                        self.draw_device_grid(ui);
+                                    }
+                                });
+                        });
+
+                        // FOOTER
+                        ui.add_space(12.0);
+                        ui.push_id("footer", |ui| {
+                            self.draw_footer(ui);
+                        });
                     });
-
-                // Footer: received files count
-                ui.add_space(8.0);
-                self.draw_footer(ui);
             });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -383,10 +429,63 @@ impl eframe::App for KvakkApp {
 }
 
 impl KvakkApp {
+    fn draw_title_bar(&self, ui: &mut egui::Ui) {
+        let title_bar_height = 32.0;
+        let title_bar_rect = {
+            let mut rect = ui.max_rect();
+            rect.max.y = rect.min.y + title_bar_height;
+            rect
+        };
+
+        // Make title bar draggable
+        let title_bar_response = ui.interact(
+            title_bar_rect,
+            egui::Id::new("title_bar"),
+            egui::Sense::click_and_drag(),
+        );
+
+        if title_bar_response.drag_started_by(egui::PointerButton::Primary) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        // Draw title text
+        ui.painter().text(
+            title_bar_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Kvakk",
+            egui::FontId::proportional(14.0),
+            theme::SUBTEXT0,
+        );
+
+        // Close button on the right
+        let button_size = 24.0;
+        let button_rect = egui::Rect::from_center_size(
+            egui::pos2(title_bar_rect.right() - 20.0, title_bar_rect.center().y),
+            egui::vec2(button_size, button_size),
+        );
+
+        let close_response = ui.interact(button_rect, egui::Id::new("close_btn"), egui::Sense::click());
+
+        let close_color = if close_response.hovered() { theme::RED } else { theme::OVERLAY0 };
+        ui.painter().text(
+            button_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::proportional(20.0),
+            close_color,
+        );
+
+        if close_response.clicked() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        // Reserve space for title bar
+        ui.allocate_space(egui::vec2(ui.available_width(), title_bar_height));
+    }
+
     fn draw_device_grid(&mut self, ui: &mut egui::Ui) {
         if self.endpoints.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(60.0);
+            ui.centered_and_justified(|ui| {
                 ui.label(egui::RichText::new("Searching for nearby devices...")
                     .size(14.0)
                     .color(theme::OVERLAY0));
@@ -394,36 +493,34 @@ impl KvakkApp {
             return;
         }
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(20.0);
+        let mut clicked_endpoint: Option<EndpointInfo> = None;
 
-            // Create a grid of device circles
-            let endpoints_snapshot: Vec<_> = self.endpoints.clone();
-            let mut clicked_endpoint: Option<EndpointInfo> = None;
-
-            egui::Grid::new("device_grid")
-                .spacing([20.0, 20.0])
-                .show(ui, |ui| {
-                    for (i, endpoint) in endpoints_snapshot.iter().enumerate() {
+        // Scrollable area for many devices
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(16.0, 16.0);
+                    for endpoint in &self.endpoints {
                         if self.draw_device_circle(ui, endpoint) {
                             clicked_endpoint = Some(endpoint.clone());
                         }
-                        if (i + 1) % 3 == 0 {
-                            ui.end_row();
-                        }
                     }
                 });
+            });
 
-            // Handle click - open file picker
-            if let Some(endpoint) = clicked_endpoint
-                && let Some(paths) = rfd::FileDialog::new().pick_files()
-            {
-                let files: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-                if !files.is_empty() {
-                    self.send_files_to(&endpoint, files);
+        // Handle click - open file picker in background thread
+        if let Some(endpoint) = clicked_endpoint {
+            let tx = self.tx.clone();
+            let ctx = ui.ctx().clone();
+            thread::spawn(move || {
+                if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                    let files: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+                    drop(tx.send(GuiMessage::FilesPicked(endpoint, files)));
+                    ctx.request_repaint();
                 }
-            }
-        });
+            });
+        }
     }
 
     #[allow(clippy::cast_precision_loss)]

@@ -2,7 +2,6 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::sharing_nearby::wifi_credentials_metadata::SecurityType;
 use crate::utils::RemoteDeviceInfo;
@@ -18,8 +17,7 @@ pub struct InternalFileInfo {
     pub file: Option<File>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransferPayload {
     Files(Vec<String>),
     Text(String),
@@ -27,13 +25,11 @@ pub enum TransferPayload {
     Wifi {
         ssid: String,
         password: String,
-        #[ts(type = "number")]
         security_type: SecurityType,
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransferPayloadKind {
     Files,
     Text,
@@ -56,8 +52,7 @@ impl TransferPayload {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferMetadata {
     pub id: String,
     pub source: Option<RemoteDeviceInfo>,

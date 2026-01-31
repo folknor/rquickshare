@@ -9,8 +9,6 @@ use channel::ChannelMessage;
 #[cfg(target_os = "linux")]
 use hdl::BleAdvertiser;
 use hdl::MDnsDiscovery;
-use rand::Rng;
-use rand::distr::Alphanumeric;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -116,9 +114,7 @@ impl RQS {
         self.tracker = Some(tracker.clone());
         self.ctoken = Some(ctoken.clone());
 
-        let endpoint_id: Vec<u8> = rand::rng()
-            .sample_iter(Alphanumeric)
-            .take(4).collect();
+        let endpoint_id = utils::get_endpoint_id();
         let tcp_listener =
             TcpListener::bind(format!("0.0.0.0:{}", self.port_number.unwrap_or(0))).await?;
         let binded_addr = tcp_listener.local_addr()?;
@@ -133,7 +129,7 @@ impl RQS {
         let send_channel = mpsc::channel(10);
         // Start TcpServer in own "task"
         let mut server = TcpServer::new(
-            endpoint_id[..4].try_into()?,
+            endpoint_id,
             tcp_listener,
             self.message_sender.clone(),
             send_channel.1,
@@ -151,7 +147,7 @@ impl RQS {
 
         // Start MDnsServer in own "task"
         let mut mdns = MDnsServer::new(
-            endpoint_id[..4].try_into()?,
+            endpoint_id,
             binded_addr.port(),
             self.ble_sender.subscribe(),
         )?;

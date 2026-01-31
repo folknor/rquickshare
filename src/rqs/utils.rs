@@ -1,25 +1,78 @@
+use std::fs;
+use std::io::Write;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::anyhow;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use directories::ProjectDirs;
 use get_if_addrs::get_if_addrs;
 use hkdf::Hkdf;
 use num_bigint::{BigUint, ToBigInt};
 use p256::elliptic_curve::rand_core::OsRng;
 use p256::{PublicKey, SecretKey};
+use rand::distr::Alphanumeric;
 use rand::{Rng, RngCore};
 use sha2::Sha256;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
-use ts_rs::TS;
+
 
 use crate::CUSTOM_DOWNLOAD;
 
-#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize, TS)]
-#[ts(export)]
+/// Persistent endpoint ID - loaded from data dir or generated once and saved
+static ENDPOINT_ID: LazyLock<[u8; 4]> = LazyLock::new(|| {
+    // Try to load from data directory
+    if let Some(proj_dirs) = ProjectDirs::from("", "", "rquickshare") {
+        let data_dir = proj_dirs.data_dir();
+        let endpoint_file = data_dir.join("endpoint_id");
+
+        // Try to read existing endpoint_id
+        if let Ok(data) = fs::read(&endpoint_file)
+            && data.len() >= 4
+        {
+            let mut id = [0u8; 4];
+            id.copy_from_slice(&data[..4]);
+            return id;
+        }
+
+        // Generate new endpoint_id and save it
+        let id: [u8; 4] = rand::rng()
+            .sample_iter(Alphanumeric)
+            .take(4)
+            .collect::<Vec<u8>>()
+            .try_into()
+            .unwrap_or([b'A', b'B', b'C', b'D']);
+
+        // Best effort save - don't fail if we can't persist
+        if fs::create_dir_all(data_dir).is_ok()
+            && let Ok(mut file) = fs::File::create(&endpoint_file)
+        {
+            drop(file.write_all(&id));
+        }
+
+        return id;
+    }
+
+    // Fallback: generate random (won't be persistent)
+    rand::rng()
+        .sample_iter(Alphanumeric)
+        .take(4)
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap_or([b'A', b'B', b'C', b'D'])
+});
+
+/// Returns the persistent 4-byte endpoint ID used for mDNS service naming.
+/// This ID is generated once and saved to the app's data directory.
+pub fn get_endpoint_id() -> [u8; 4] {
+    *ENDPOINT_ID
+}
+
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub enum DeviceType {
     #[default]
@@ -42,8 +95,7 @@ impl DeviceType {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RemoteDeviceInfo {
     pub name: String,
     pub device_type: DeviceType,

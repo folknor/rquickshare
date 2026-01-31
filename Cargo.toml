@@ -8,14 +8,17 @@ license = "AGPL-3.0"
 
 [lib]
 name = "rqs"
-path = "src-tauri/src/rqs/lib.rs"
+path = "src/rqs/lib.rs"
 
 [[bin]]
 name = "rquickshare"
-path = "src-tauri/src/main.rs"
+path = "src/main.rs"
+
+[[bin]]
+name = "rqs-debug"
+path = "src/bin/rqs_debug.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
 prost-build = "0.14"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -48,22 +51,16 @@ rand = "0.9"
 sha2 = "0.10"
 uuid = "1.20"
 
-# Tauri dependencies
+# Runtime
 env_logger = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "2", features = ["rustls-tls", "image-png"] }
-tauri-plugin-single-instance = "2"
-tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "sync", "time", "io-util", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
-# TypeScript bindings generation
-ts-rs = "10"
-
-[features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+# GUI (egui)
+eframe = "0.33"
+rfd = "0.17"
 
 [profile.release]
 lto = true

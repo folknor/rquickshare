@@ -24,11 +24,10 @@ mod outbound;
 pub use outbound::*;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
+
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum TransferState {
     #[default]
     Initial,

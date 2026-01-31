@@ -2,7 +2,7 @@
 extern crate log;
 
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{LazyLock, RwLock};
 
 use anyhow::anyhow;
 use channel::ChannelMessage;
@@ -12,7 +12,7 @@ use hdl::MDnsDiscovery;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -26,7 +26,7 @@ pub mod hdl;
 pub mod manager;
 pub mod utils;
 
-pub use hdl::{EndpointInfo, OutboundPayload, TransferState, Visibility};
+pub use hdl::{EndpointInfo, OutboundPayload, TransferState};
 pub use manager::SendInfo;
 pub use utils::DeviceType;
 
@@ -63,10 +63,6 @@ pub struct RQS {
     // - can be cancelled while the ctoken is still active
     discovery_ctk: Option<CancellationToken>,
 
-    // Used to trigger a change in the mDNS visibility (and later on, BLE)
-    pub visibility_sender: Arc<Mutex<watch::Sender<Visibility>>>,
-    visibility_receiver: watch::Receiver<Visibility>,
-
     // Only used to send the info "a nearby device is sharing"
     ble_sender: broadcast::Sender<()>,
 
@@ -80,13 +76,12 @@ impl Default for RQS {
         let hostname = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "Unknown device".into());
-        Self::new(Visibility::Visible, None, None, Some(hostname))
+        Self::new(None, None, Some(hostname))
     }
 }
 
 impl RQS {
     pub fn new(
-        visibility: Visibility,
         port_number: Option<u32>,
         download_path: Option<PathBuf>,
         device_name: Option<String>,
@@ -103,16 +98,10 @@ impl RQS {
         let (message_sender, _) = broadcast::channel(50);
         let (ble_sender, _) = broadcast::channel(5);
 
-        // Define default visibility as per the args inside the new()
-        let (visibility_sender, visibility_receiver) = watch::channel(Visibility::Invisible);
-        _ = visibility_sender.send(visibility);
-
         Self {
             tracker: None,
             ctoken: None,
             discovery_ctk: None,
-            visibility_sender: Arc::new(Mutex::new(visibility_sender)),
-            visibility_receiver,
             ble_sender,
             port_number,
             message_sender,
@@ -165,8 +154,6 @@ impl RQS {
             endpoint_id[..4].try_into()?,
             binded_addr.port(),
             self.ble_sender.subscribe(),
-            Arc::clone(&self.visibility_sender),
-            self.visibility_receiver.clone(),
         )?;
         let ctk = ctoken.clone();
         tracker.spawn(async move { mdns.run(ctk).await });
@@ -216,12 +203,6 @@ impl RQS {
         if let Some(discovert_ctk) = &self.discovery_ctk {
             discovert_ctk.cancel();
             self.discovery_ctk = None;
-        }
-    }
-
-    pub fn change_visibility(&mut self, nv: Visibility) {
-        if let Ok(sender) = self.visibility_sender.lock() {
-            sender.send_modify(|state| *state = nv);
         }
     }
 

@@ -9,7 +9,7 @@ extern crate log;
 use std::sync::OnceLock;
 
 use rqs::channel::{ChannelMessage, Message};
-use rqs::{EndpointInfo, SendInfo, Visibility, RQS};
+use rqs::{EndpointInfo, SendInfo, RQS};
 use tauri::{AppHandle, Emitter, Manager, Window, WindowEvent};
 use tokio::sync::{broadcast, mpsc};
 
@@ -49,9 +49,9 @@ async fn main() -> Result<(), anyhow::Error> {
         .setup(|app| {
             debug!("Starting setup of RQuickShare app");
 
-            // Create RQS instance - always visible, use default download path
+            // Create RQS instance - use default download path
             trace!("Creating RQS instance");
-            let rqs = RQS::new(Visibility::Visible, None, None, None);
+            let rqs = RQS::new(None, None, None);
 
             // Define state for tauri app immediately (window can show now!)
             app.app_handle().manage(AppState {

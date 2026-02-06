@@ -127,7 +127,10 @@ impl TcpServer {
                         },
                         Err(err) => {
                             error!("{INNER_NAME}: error accepting: {err}");
-                            break;
+                            // Don't break on transient errors (e.g. EMFILE, ENOMEM)
+                            // - only a cancelled token should stop the server
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            continue;
                         }
                     }
                 }

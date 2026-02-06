@@ -562,6 +562,11 @@ impl OutboundRequest {
                             ));
                         }
 
+                        // Prevent unbounded growth of payload buffers
+                        if !self.state.payload_buffers.contains_key(&payload_id) && self.state.payload_buffers.len() >= 64 {
+                            return Err(anyhow!("Too many concurrent payload buffers ({})", self.state.payload_buffers.len()));
+                        }
+
                         self.state
                             .payload_buffers
                             .entry(payload_id)
@@ -590,6 +595,8 @@ impl OutboundRequest {
                             debug!("Chunk flags & 1 == 1 ?? End of data ??");
 
                             let inner_frame = sharing_nearby::Frame::decode(buffer.as_slice())?;
+                            // Clean up completed buffer
+                            self.state.payload_buffers.remove(&payload_id);
                             self.process_transfer_setup(&inner_frame).await?;
                         }
                     }

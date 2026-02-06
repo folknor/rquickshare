@@ -46,6 +46,9 @@ type HmacSha256 = Hmac<Sha256>;
 const SANE_FRAME_LENGTH: i32 = 5 * 1024 * 1024;
 const SANITY_DURATION: Duration = Duration::from_micros(10);
 
+/// Read timeout for inbound connections (how long to wait for next frame from sender)
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug)]
 pub struct InboundRequest {
     socket: TcpStream,
@@ -116,10 +119,17 @@ impl InboundRequest {
                     }
                 }
             },
-            h = stream_read_exact(&mut self.socket, &mut length_buf) => {
-                h?;
-
-                self._handle(length_buf).await?;
+            result = tokio::time::timeout(READ_TIMEOUT, stream_read_exact(&mut self.socket, &mut length_buf)) => {
+                match result {
+                    Ok(h) => {
+                        h?;
+                        self._handle(length_buf).await?;
+                    }
+                    Err(_) => {
+                        warn!("Inbound read timeout after {}s in state {:?}", READ_TIMEOUT.as_secs(), self.state.state);
+                        return Err(anyhow!("Read timeout"));
+                    }
+                }
             }
         }
 
@@ -561,6 +571,11 @@ impl InboundRequest {
         if header.total_size() > i64::from(SANE_FRAME_LENGTH) {
             self.state.payload_buffers.remove(&payload_id);
             return Err(anyhow!("Payload too large: {} bytes", header.total_size()));
+        }
+
+        // Prevent unbounded growth of payload buffers from misbehaving peers
+        if !self.state.payload_buffers.contains_key(&payload_id) && self.state.payload_buffers.len() >= 64 {
+            return Err(anyhow!("Too many concurrent payload buffers ({})", self.state.payload_buffers.len()));
         }
 
         self.state
